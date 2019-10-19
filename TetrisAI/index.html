@@ -1,0 +1,1015 @@
+<!doctype html>
+<html>
+<head>
+
+    <title>TetrisAI</title>
+
+</head>
+
+
+<style>
+
+    #aiDetails {
+        position:relative;
+        left:250px;
+        bottom:300px;
+
+    }
+
+</style>
+
+<body onload="initialize()">
+
+    <h1>TetrisAI</h1>
+    <div id="canvas"></div>
+    <div id="score"></div>    <div id="aiDetails"></div>
+
+
+    <script type="text/javascript">
+
+        var grid = [
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0],
+            [0,0,0,0,0,0,0,0,0,0]
+        ]
+
+        var shapes = [
+            [[0,0,0,0], [1,1,1,1], [0,0,0,0], [0,0,0,0]],
+            [[2,0,0], [2,2,2], [0,0,0]],
+            [[0,0,3], [3,3,3], [0,0,0]],
+            [[4,4], [4,4]],
+            [[0,5,5], [5,5,0], [0,0,0]],
+            [[0,6,0], [6,6,6], [0,0,0]],
+            [[7,7,0], [0,7,7], [0,0,0]]
+        ];
+
+        var speed = 1;
+        var score = 0;
+        var rndSeed = 1;
+        var bag = [];
+        var bagIndex = -1;
+        var draw = true;
+
+        var saveState;
+        var roundState;
+
+        var movesTaken = 0;
+
+        var moveLimit = 500;
+
+        var moveAlgorithm = {};
+
+        var inspectMoveSelection = false;
+
+        //AI Parameters
+        //stores number of genomes
+        var populationSize = 50;
+        //stores genomes
+        var genomes = [];
+        //index of current genome in genomes array
+        var currentGenome = -1;
+        //generation number
+        var generation = 0;
+
+        var archive = {
+            populationSize: 0,
+            currentGeneration: 0,
+            elites: [],
+            genomes: []
+        };
+
+        var mutationRate = 0.05;
+        var mutationStep = 0.2;
+        var ai = false;
+
+        function initialize() {
+
+            myGameArea.start();
+
+            if(ai) {
+
+                          archive.populationSize = populationSize;
+
+              saveState = getState();
+              roundState = getState();
+              createInitialPopulation();
+            }
+            initNewShape();
+
+            var loop = function() {
+                var interval = setInterval(update, speed);
+                outputAI();
+            }
+            loop();
+        }
+
+        var currentShape = {x: 0, y: 0, shape: undefined};
+
+        var colors = ["000000","F92338", "C973FF", "1C76BC", "FEE356", "53D504", "36E0FF", "F8931D"];
+
+        var myGameArea = {
+            canvas: document.createElement("canvas"),
+            scoreboard: document.createElement("h2"),
+            start: function() {
+                this.SQUARE_WIDTH = 20;
+                this.canvas.width = this.SQUARE_WIDTH*grid[0].length;
+                this.canvas.height = this.SQUARE_WIDTH*grid.length;
+                this.context = this.canvas.getContext("2d");
+                document.body.insertBefore(this.canvas, document.body.childNodes[2]);
+                this.frameNo = 0;
+
+            },
+            clear: function() {
+                this.context.clearRect(0, 0, this.canvas.width, this.canvas.height);
+            },
+            draw: function() {
+                if(draw) {
+                    var SQUARE_WIDTH = this.SQUARE_WIDTH;
+                    var x = 0;
+                    var y = 0;
+
+                    //Draw the grid. (2 upmost layers are hidden);
+                    for(var i = 2; i < grid.length; i++) {
+                        for(var j = 0; j < grid[0].length; j++) {
+                            var color = colors[grid[i][j]];
+                                this.context.fillStyle = "#"+color;
+                            this.context.fillRect(x,y,SQUARE_WIDTH,SQUARE_WIDTH);
+                            x += SQUARE_WIDTH;
+                        }
+                        x = 0;
+                        y += SQUARE_WIDTH;
+                    }
+                    //Output the game score
+                    document.getElementById("score").innerHTML = "<h2>Score: "+score+"</h2>";
+                }
+            }
+        }
+
+        function update() {
+            if(ai) {
+                var results = moveDown();
+
+                //if nothing happened
+                if(!results.moved) {
+                    //if we lost
+                    if(results.lose) {
+                        genomes[currentGenome].fitness = clone(score);
+                        evaluateNextGenome();
+                    } else {
+                        //alert("hej");
+                        makeNextMove();
+                    }
+                }
+            } else {
+                moveDown();
+            }
+            myGameArea.draw();
+        }
+
+        /**
+         * Creates the initial population of genomes, each with random genes.
+         */
+
+        function createInitialPopulation() {
+            genomes = [];
+
+            for(var i = 0; i < populationSize; i++) {
+                //randomly initialize the 7 values that make up a genome
+                //these are all weight values that are updated through evolution
+                var genome = {
+                    createInitialPopulationid: Math.random(),
+                    rowsCleared: Math.random() - 0.5,
+                    weightedHeight: Math.random() - 0.5,
+                    cumulativeHeight: Math.random() - 0.5,
+                    relativeHeight: Math.random() - 0.5,
+                    holes: Math.random() * 0.5,
+                    roughness: Math.random() - 0.5
+                };
+
+                genomes.push(genome);
+            }
+
+            evaluateNextGenome();
+        }
+
+        /**
+         * Evaluates the next genome in the population. If there is none, evolves the population
+         */
+
+        function evaluateNextGenome() {
+
+            //alert("Hej"+currentGenome);
+
+            currentGenome++;
+
+            console.log("evaluateNextGenome"+ "currentGenome: "+currentGenome);
+            if(currentGenome == genomes.length) {
+                evolve();
+            }
+
+            loadState(roundState);
+
+            movesTaken = 0;
+
+            makeNextMove();
+        }
+
+        /**
+         * Evolves the entire population and goes to the next generation.
+         */
+        function evolve() {
+            console.log("Generation " + generation + " evaluated");
+
+            currentGenome = 0;
+
+            generation++;
+
+            reset();
+
+            roundState = getState();
+
+
+            //sorts genomes in descending order of fitness values
+            genomes.sort(function(a, b) {
+                return b.fitness - a.fitness;
+            });
+
+            //add a copy of the fittest genome to the elites list
+            archive.elites.push(clone(genomes[0]));
+
+            //remove the tail end of genomes, focus on the fittest
+            while(genomes.length > populationSize / 2) {
+                genomes.pop();
+            }
+            //sum of the fitness for each genome
+            var totalFitness = 0;
+            for(var i = 0; i < genomes.length; i++) {
+                totalFitness += genomes[i].fitness;
+            }
+
+            //get random index from genome array
+            function getRandomGene() {
+                return genomes[getRandomWeightedNumBeteween(0,genomes.length-1)];
+            }
+
+            //create children array
+            var children = [];
+            //add the fittest genome to the array
+            children.push(clone(genomes[0]));
+            //add population size amount of children
+            while(children.length < populationSize) {
+                //crossover between two random genomes to make a child
+                children.push(makeChild(getRandomGene(),getRandomGene()));
+            }
+
+            //create new genome array
+            genomes = [];
+            //to store all the children in
+            genomes = genomes.concat(children);
+            //store this in our archive
+            archive.genomes = clone(genomes);
+            //and set the curren gen
+            archive.currentGeneration = clone(generation);
+            //store archive, thanks JS localstorage!
+            localStorage.setItem("archive", JSON.stringify(archive));
+
+        }
+
+        /**
+         * Creates a child genome from the given parent genomes, and then attempts to mutate the child genome.
+         * @param {Genome} mum The first parent genome.
+         * @param {Genome} dad The second parent genome.
+         * @return {Genome} The child genome.
+         */
+        function makeChild(mum, dad) {
+            //init the child given two genomes (its 7 parameters + initial fitness values
+            var child = {
+                id: Math.random(),
+                rowsCleared: randomChoice(mum.rowsCleared, dad.rowsCleared),
+                weightedHeight: randomChoice(mum.weightedHeight, dad.weightedHeight),
+                cumulativeHeight: randomChoice(mum.cumulativeHeight, dad.cumulativeHeight),
+                relativeHeight: randomChoice(mum.relativeHeight, dad.relativeHeight),
+                holes: randomChoice(mum.holes, dad.holes),
+                roughness: randomChoice(mum.roughness, dad.roughness),
+
+                //no fitness yet
+                fitness: -1
+            }
+
+            //we mutate each parameter using our mutationstep
+            if (Math.random() < mutationRate) {
+                child.rowsCleared = child.rowsCleared + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            if (Math.random() < mutationRate) {
+                child.weightedHeight = child.weightedHeight + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            if (Math.random() < mutationRate) {
+                child.cumulativeHeight = child.cumulativeHeight + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            if (Math.random() < mutationRate) {
+                child.relativeHeight = child.relativeHeight + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            if (Math.random() < mutationRate) {
+                child.holes = child.holes + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            if (Math.random() < mutationRate) {
+                child.roughness = child.roughness + Math.random() * mutationStep * 2 - mutationStep;
+            }
+            return child;
+        }
+
+        /**
+         *  Returns an array of all the possible moves that could occur in the current state, rated by the parameters of the current genome.
+         *  @return {Array} An array of all the possible moves that could occur.
+         */
+        function getAllPossibleMoves() {
+            var lastState = getState();
+            var possibleMoves = [];
+            var possibleMoveRatings = [];
+            var iterations = 0;
+
+            //for each rotation
+            for(var rots = 0; rots < 4; rots++) {
+
+                var oldX = [];
+                //for each iteration
+                for(var t = -5; t < 5; t++) {
+
+                    iterations++;
+                    loadState(lastState);
+                    //rotate shape
+                    for(var j = 0; j < rots; j++) {
+                        rotateRight();
+                    }
+
+                    //move left
+                    if(t < 0) {
+                        for(var l = 0; l < Math.abs(t); l++) {
+                            moveLeft();
+                        }
+                    }
+                    //move right
+                    else if(t > 0) {
+                        for(var r = 0; r < Math.abs(t); r++) {
+                            moveRight();
+                        }
+                    }
+
+                    //if the shape has moved at all
+                    if(!contains(oldX, currentShape.x)) {
+
+                        //move it down
+
+
+
+                        var moveDownResults = moveDown();
+                        while(moveDownResults.moved) {
+                            moveDownResults = moveDown();
+                        }
+                        //alert("INX");
+
+                        //set the 7 parameters of a genome
+                        var algorithm = {
+                            rowsCleared: moveDownResults.rowsCleared,
+                            weightedHeight: Math.pow(getHeight(),1.5),
+                            cumulativeHeight: getCumulativeHeight(),
+                            relativeHeight: getRelativeHeight(),
+                            holes: getHoles(),
+                            roughness: getRoughness()
+                        };
+
+                        var rating = 0;
+                        rating += algorithm.rowsCleared * genomes[currentGenome].rowsCleared;
+                        rating += algorithm.weightedHeight * genomes[currentGenome].weightedHeight;
+                        rating += algorithm.cumulativeHeight * genomes[currentGenome].cumulativeHeight;
+                        rating += algorithm.relativeHeight * genomes[currentGenome].relativeHeight;
+                        rating += algorithm.holes * genomes[currentGenome].holes;
+                        rating += algorithm.roughness * genomes[currentGenome].roughness;
+
+                        if(moveDownResults.lose) {
+                            rating -= 500;
+                        }
+                        possibleMoves.push({rotations: rots, translation: t, rating: rating, algorithm: algorithm});
+                        oldX.push(currentShape.x);
+                    }
+
+                }
+            }
+
+            loadState(lastState);
+            //return array of all possible moves
+            return possibleMoves;
+        }
+
+
+        /**
+         * Returns the highest rated move in the given array of moves.
+         * @param {Array} moves An array of possible moves to choose from.
+         * @return {Move} The highest rated move from the moveset.
+         */
+        function getHighestRatedMove(moves) {
+            var maxRating = -10000000000000;
+            var maxMove = -1;
+            var ties = [];
+
+            for(var i = 0; i < moves.length; i++) {
+                if(moves[i].rating > maxRating) {
+                    maxRating = moves[i].rating;
+                    maxMove = i;
+                    ties = [i];
+                } else if(moves[i].rating == maxRating) {
+                    ties.push(i);
+                }
+            }
+
+            var move = moves[ties[0]];
+            move.algorithm.ties = ties.length;
+            return move;
+        }
+
+
+        /**
+         * Make a move, which is decided upon using the parameters in the current genome.
+         */
+        function makeNextMove() {
+            //increment number of moves taken
+            movesTaken++;
+
+            if(movesTaken > moveLimit) {
+                //update this genome's fitness value to the game score.
+                genomes[currentGenome].fitness = clone(score);
+                //and evaluate the next genome
+                evaluateNextGenome();
+            } else {
+                //we're going to redraw, so lets store the old drawing
+                var oldDraw = clone(draw);
+                draw = false;
+
+                //get all the possible moves
+                var possibleMoves = getAllPossibleMoves();
+                //lets store the current stance since we will update it.
+                var lastState = getState();
+                //what's next shape to play
+                initNewShape();
+                //for each possible move
+                for (var i = 0; i < possibleMoves.length; i++) {
+                    //get the best move. so were checking all the possible moves, for each possible move. moveception.
+                    var nextMove = getHighestRatedMove(getAllPossibleMoves());
+                    //add that rating to an array of highest rates moves
+                    possibleMoves[i].rating += nextMove.rating;
+                }
+
+                //load current state
+                loadState(lastState);
+
+                //get the highest rated move ever
+                var move = getHighestRatedMove(possibleMoves);
+                //then rotate the shape as it says to
+                for(var rotations = 0; rotations < move.rotations; rotations++) {
+                    rotateRight();
+                }
+
+                //Move left
+                if(move.translation < 0) {
+                    for(var lefts = 0; lefts < Math.abs(move.translation); lefts++) {
+                        moveLeft();
+                    }
+                }
+                //Move right
+                else if(move.translation > 0) {
+                    for(var rights = 0; rights < move.translation; rights++) {
+                        moveRight();
+                    }
+                }
+
+                if (inspectMoveSelection) {
+                    moveAlgorithm = move.algorithm;
+                }
+
+                draw = oldDraw;
+                myGameArea.draw();
+            }
+        }
+
+        function contains(a, obj) {
+            var i = a.length;
+            while(i--) {
+                if(a[i] === obj) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+
+        function getState() {
+            var state = {
+                grid: clone(grid),
+                currentShape: clone(currentShape),
+                bag: clone(bag),
+                bagIndex: clone(bagIndex),
+                rndSeed: clone(rndSeed),
+                score: clone(score)
+            };
+            return state;
+        }
+
+        /**
+        * Loads the game state from the given state object.
+        * @param {State} state the  state object
+        */
+        function loadState(state) {
+            grid = clone(state.grid);
+            currentShape = clone(state.currentShape);
+            bag = clone(state.bag);
+            bagIndex = clone(state.bagIndex);
+            rndSeed = clone(state.rndSeed);
+            score = clone(state.score);
+            myGameArea.draw();
+        }
+
+        /**
+         *  Clones an object.
+         *  @param {Object} obj the given object.
+         *  @return {Object} The cloned object.
+         */
+
+        function clone(obj) {
+            return JSON.parse(JSON.stringify(obj));
+        }
+
+
+        function reset() {
+            //alert("Game Over");
+            grid = [
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,0]
+            ];
+            score = 0;
+
+            myGameArea.clear();
+            //currentShape.shape = undefined;
+            generateBag();
+            initNewShape();
+            addShape();
+            myGameArea.draw();
+            outputAI();
+
+        }
+
+        //Key options
+
+        window.onkeydown = function (event) {
+
+            var characterPressed = String.fromCharCode(event.keyCode);
+
+            if (event.keyCode == 38) {
+                //UP
+                rotateRight();
+            }
+            if (event.keyCode == 40) {
+                //DOWN
+                moveDown();
+            }
+            if (event.keyCode == 39) {
+                //RIGHT
+                moveRight();
+            }
+            if (event.keyCode == 37) {
+                //LEFT
+                moveLeft();
+            }
+            if (event.keyCode == 32) {
+                //SPACE
+                moveDownInstant();
+            }
+        }
+
+        function moveLeft() {
+            clearShape();
+            currentShape.x--;
+            if(collides()) {
+                currentShape.x++;
+            }
+        }
+
+        function moveRight() {
+            clearShape();
+            currentShape.x++;
+            if(collides()) {
+                currentShape.x--;
+            }
+        }
+
+        /*
+        * Transpose the current shape
+        */
+        function rotateShape() {
+            if(currentShape.shape != undefined) {
+                clearShape();
+                var newShape = [];
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    newShape.push([]);
+                    for (var col = 0; col < currentShape.shape[row].length; col++) {
+                        newShape[row][col] = currentShape.shape[col][row];
+                    }
+                }
+                currentShape.shape = newShape;
+            }
+        }
+
+        /*
+        * Rotates the current shape to the right.
+        */
+        function rotateRight() {
+            //https://tetris.com/play-tetris/?utm_source=top_nav_link&utm_medium=webnav&utm_campaign=playNow_btm_tst&utm_content=text_play_now
+            if(currentShape.shape != undefined) {
+                clearShape();
+                var newShape = [];
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    newShape.push([]);
+                }
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    for (var col = 0; col < currentShape.shape[row].length; col++) {
+                        newShape[row][col] = currentShape.shape[currentShape.shape.length-col-1][row];
+                    }
+                }
+                currentShape.shape = newShape;
+            }
+        }
+
+        /*
+        * Rotates the current shape to the left.
+        */
+        function rotateLeft() {
+            //https://tetris.com/play-tetris/?utm_source=top_nav_link&utm_medium=webnav&utm_campaign=playNow_btm_tst&utm_content=text_play_now
+            if(currentShape.shape != undefined) {
+                clearShape();
+                var newShape = [];
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    newShape.push([]);
+                }
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    for (var col = 0; col < currentShape.shape[row].length; col++) {
+                        newShape[currentShape.shape.length-row-1][col] = currentShape.shape[col][row];
+                    }
+                }
+                currentShape.shape = newShape;
+            }
+        }
+
+        /**
+        *   Scan the grid for perfect deletable rows
+        *   @return {Integer} Number of cleared rows
+        */
+        function scanFullRows() {
+            if (currentShape.shape == undefined) {
+                return 0;
+            }
+
+            var foundPerfectRow = false;
+
+            var row = 0;
+
+            var res = 0;
+            for (; row < currentShape.shape.length+1; row++) {
+
+                if(currentShape.y+row-1 >= grid.length) break;
+
+                var x = 0;
+                for(; x < grid[currentShape.y+row-1].length; x++) {
+
+                    if(grid[currentShape.y+row-1][x] == 0) {
+                        foundPerfectRow = true;
+                        break;
+                    }
+                }
+                if(x == grid[currentShape.y+row-1].length) {
+                    //Found perfect row
+                    grid.splice(currentShape.y+row-1,1);
+                    grid.unshift([0,0,0,0,0,0,0,0,0,0]);
+                    score += 10;
+                    res++;
+                }
+            }
+
+            if(res == 1) {
+                score += 400;
+            } else if(res == 2) {
+                score += 1000;
+            } else if(res == 3) {
+                score += 3000;
+            } else if(res == 4) {
+                score += 12000;
+            }
+
+            return res;
+        }
+
+        /**
+         * Moves down currentShape one step.
+         * @return {Object} The results of the movement of the piece
+         */
+        function moveDown() {
+            //alert("Move down");
+            var result = {lose: false, moved: true, rowsCleared: 0};
+
+            clearShape();
+            currentShape.y++;
+            if(collides()) {
+                currentShape.y--;
+
+                addShape();
+                result.rowsCleared = scanFullRows();
+                initNewShape();
+
+                if(collides()) {
+                    result.lose = true;
+                    //GAME OVER
+                    if(ai) {
+
+                    } else {
+                        reset();
+                    }
+                }
+                result.moved = false;
+            }
+            addShape();
+            myGameArea.draw();
+            score++;
+            return result;
+        }
+
+        function moveDownInstant() {
+            while(moveDown().moved) {
+            }
+        }
+
+        function collides() {
+            if(currentShape.shape == undefined) {
+                return false;
+            }
+            for (var row = 0; row < currentShape.shape.length; row++) {
+                for (var col = 0; col < currentShape.shape[row].length; col++) {
+                    if(currentShape.y + row >= grid.length && currentShape.shape[row][col] !== 0) {
+                        return true;
+                    }
+                    if (currentShape.shape[row][col] !== 0 && grid[currentShape.y + row][currentShape.x + col] !== 0) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        function clearShape() {
+            if(currentShape.shape === undefined) {
+                return;
+            }
+
+                for (var row = 0; row < currentShape.shape.length; row++) {
+                    for (var col = 0; col < currentShape.shape[row].length; col++) {
+                        if(currentShape.y+row >= grid.length) break;
+
+                        if (currentShape.shape[row][col] !== 0) {
+                            grid[currentShape.y + row][currentShape.x + col] = 0;
+                        }
+                    }
+                }
+
+        }
+
+        function addShape() {
+            if(currentShape.shape === undefined) {
+                return;
+            }
+
+            for(var row = 0; row < currentShape.shape.length; row++) {
+                for(var col = 0; col < currentShape.shape[row].length; col++) {
+                    if(currentShape.y+row >= grid.length) break;
+
+                    if(currentShape.shape[row][col] !== 0) {
+                        grid[currentShape.y+row][currentShape.x+col] = currentShape.shape[row][col];
+                    }
+                }
+            }
+        }
+
+        /*
+            Generates the bag filled with the upcoming shapes
+         */
+
+        function generateBag() {
+            var str = "";
+            //alert("bag");
+            for(var i = 0; i < 7; i++) {
+                var rand = Math.floor(Math.random()*shapes.length);
+                while(str.indexOf(rand) != -1) {
+                    rand = Math.floor(Math.random()*shapes.length);
+                }
+                str += rand;
+                bag[i] = rand;
+            }
+            //alert("bag:"+bag);
+            bagIndex = 0;
+        }
+
+        function getRandomWeightedNumBeteween(min, max) {
+            return Math.floor(Math.pow(Math.random(), 2) * (max - min + 1) + min);
+        }
+
+        function randomChoice(one, two) {
+            if(Math.floor(Math.random()) === 0) {
+                return clone(one);
+            } else {
+                return clone(two);
+            }
+        }
+
+        function initNewShape() {
+            bagIndex++;
+            if(bagIndex == bag.length || bag.length === 0) {
+                generateBag();
+            }
+
+            var randomShape = shapes[bag[bagIndex]];
+            currentShape.shape = randomShape;
+            currentShape.x = Math.floor(Math.random()*(grid[0].length-currentShape.shape[0].length+1));
+            currentShape.y = 1;
+        }
+
+        /**
+         * Returns the cumulative height of all the columns.
+         * @return {Number} the cumulative height.
+         */
+        function getCumulativeHeight() {
+            clearShape();
+            var res = 0;
+
+            for(var col = 0; col < grid[0].length; col++) {
+                for(var row = 3; row < grid.length; row++) {
+                    if(grid[row][col] != 0) {
+                        //alert("row: "+ row + " col: "+ col);
+                        res += grid.length-row;
+                        break;
+                    }
+                }
+            }
+            addShape();
+            return res;
+        }
+
+
+        /**
+         * Returns the number of holes in the grid.
+         * @return {Number} The number of holes in the grid.
+         */
+        function getHoles() {
+            clearShape();
+            var peaks = [20,20,20,20,20,20,20,20,20,20];
+            for (var row = 0; row < grid.length; row++) {
+                for (var col = 0; col < grid[row].length; col++) {
+                    if (grid[row][col] !== 0 && peaks[col] === 20) {
+                        peaks[col] = row;
+                    }
+                }
+            }
+            var holes = 0;
+            for (var x = 0; x < peaks.length; x++) {
+                for (var y = peaks[x]; y < grid.length; y++) {
+                    if (grid[y][x] === 0) {
+                        holes++;
+                    }
+                }
+            }
+            addShape();
+            return holes;
+        }
+
+
+        /**
+         * Returns the roughness of the grid
+         * @return {Number} The roughness of the grid.
+         */
+        function getRoughness() {
+            clearShape();
+            var peaks = [20,20,20,20,20,20,20,20,20,20];
+            for (var row = 0; row < grid.length; row++) {
+                for (var col = 0; col < grid[row].length; col++) {
+                    if (grid[row][col] !== 0 && peaks[col] === 20) {
+                        peaks[col] = row;
+                    }
+                }
+            }
+            var roughness = 0;
+            var differences = [];
+            for (var i = 0; i < peaks.length - 1; i++) {
+                roughness += Math.abs(peaks[i] - peaks[i + 1]);
+                differences[i] = Math.abs(peaks[i] - peaks[i + 1]);
+            }
+            addShape();
+            return roughness;
+        }
+
+        /**
+         *
+         * Returns the range of heights of the columns on the grid.
+         * @return {Number} The relative height.
+         */
+        function getRelativeHeight() {
+            clearShape();
+            var peaks = [20,20,20,20,20,20,20,20,20,20];
+            for (var row = 0; row < grid.length; row++) {
+                for (var col = 0; col < grid[row].length; col++) {
+                    if (grid[row][col] !== 0 && peaks[col] === 20) {
+                        peaks[col] = row;
+                    }
+                }
+            }
+
+            addShape();
+            return Math.max.apply(Math, peaks)-Math.min.apply(Math, peaks);
+        }
+
+        /**
+         * Returns the height of the biggest column on the grid.
+         * @return {Number} The absolute height.
+         */
+        function getHeight() {
+            clearShape();
+            var peaks = [20,20,20,20,20,20,20,20,20,20];
+            for (var row = 0; row < grid.length; row++) {
+                for (var col = 0; col < grid[row].length; col++) {
+                    if (grid[row][col] !== 0 && peaks[col] === 20) {
+                        peaks[col] = row;
+                    }
+                }
+            }
+            addShape();
+            return 20 - Math.min.apply(Math, peaks);
+        }
+
+        function outputAI() {
+            var html = "";
+            var aiDetails = document.getElementById("aiDetails");
+            if (ai) {
+                html += "<br />Moves: " + movesTaken + "/" + moveLimit;
+                html += "<br />Generation: " + generation;
+                html += "<br />Individual: " + (currentGenome + 1)  + "/" + populationSize;
+                html += "<br /><pre style=\"font-size:12px\">" + JSON.stringify(genomes[currentGenome], null, 2) + "</pre>";
+                if (inspectMoveSelection) {
+                    html += "<br /><pre style=\"font-size:12px\">" + JSON.stringify(moveAlgorithm, null, 2) + "</pre>";
+                }
+            }
+            aiDetails.innerHTML = html;
+
+        }
+
+
+    </script>
+</body>
+</html>
